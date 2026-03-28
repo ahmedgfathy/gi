@@ -2,19 +2,21 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Photo Gallery</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#111315;--surface:#1c1f23;--surface2:#252930;--border:#2e333b;
   --accent:#4f8ef7;--accent-dk:#3a6fd8;--danger:#e05252;--danger-dk:#c03a3a;
-  --text:#e2e6ec;--muted:#7a8494;
-  --select-bg:rgba(79,142,247,.18);--select-bd:#4f8ef7;
+  --green:#3dba6f;--text:#e2e6ec;--muted:#7a8494;
+  --sel-bg:rgba(79,142,247,.18);--sel-bd:#4f8ef7;
   --sidebar-w:210px;--topbar-h:54px;
 }
 html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;overflow:hidden}
 #app{display:flex;height:100vh}
+
+/* sidebar */
 #sidebar{width:var(--sidebar-w);flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
 #sidebar-title{padding:18px 16px 12px;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 #cat-list{flex:1;overflow-y:auto;padding:0 8px 16px}
@@ -23,236 +25,549 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Segoe 
 .cat-btn.active{background:rgba(79,142,247,.18);color:var(--accent);font-weight:600}
 .cat-count{font-size:11px;color:var(--muted);background:var(--surface2);padding:1px 7px;border-radius:20px}
 .cat-btn.active .cat-count{background:rgba(79,142,247,.25);color:var(--accent)}
+
+/* main */
 #main{flex:1;display:flex;flex-direction:column;min-width:0}
-#topbar{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:12px;padding:0 20px;background:var(--surface);border-bottom:1px solid var(--border)}
-#cat-label{font-size:16px;font-weight:600;color:var(--text)}
+#topbar{height:var(--topbar-h);flex-shrink:0;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--surface);border-bottom:1px solid var(--border)}
+#cat-label{font-size:16px;font-weight:600}
 #spacer{flex:1}
+#dedup-banner{display:none;align-items:center;gap:8px;padding:7px 14px;background:rgba(61,186,111,.1);border:1px solid rgba(61,186,111,.3);border-radius:8px;color:#5dd48a;font-size:13px}
+#dedup-banner.show{display:flex}
 #sel-badge{display:none;align-items:center;gap:6px;padding:5px 14px;background:rgba(79,142,247,.12);border:1px solid rgba(79,142,247,.3);border-radius:20px;color:var(--accent);font-weight:600;font-size:13px}
 #sel-badge.show{display:flex}
 #sel-count{font-size:15px;min-width:22px;text-align:center}
-#btn-delete{display:none;align-items:center;gap:8px;padding:8px 18px;background:var(--danger);border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s,transform .1s}
-#btn-delete:hover{background:var(--danger-dk)}
-#btn-delete:active{transform:scale(.97)}
+
+/* topbar buttons */
+.tbtn{display:flex;align-items:center;gap:7px;padding:7px 14px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;transition:background .15s,transform .1s;white-space:nowrap}
+.tbtn:active{transform:scale(.97)}
+#btn-dedup{background:rgba(61,186,111,.12);color:#5dd48a;border:1px solid rgba(61,186,111,.25);display:none}
+#btn-dedup.show{display:flex}
+#btn-dedup:hover{background:rgba(61,186,111,.22)}
+#btn-dedup.loading{opacity:.6;cursor:wait}
+#btn-clear{background:var(--surface2);color:var(--muted);border:1px solid var(--border);display:none}
+#btn-clear.show{display:flex}
+#btn-clear:hover{color:var(--text)}
+#btn-delete{background:var(--danger);color:#fff;display:none}
 #btn-delete.show{display:flex}
-#btn-clear{display:none;padding:7px 14px;background:var(--surface2);border:none;border-radius:8px;color:var(--muted);font-size:13px;cursor:pointer;transition:background .15s,color .15s}
-#btn-clear:hover{background:var(--border);color:var(--text)}
-#btn-clear.show{display:block}
-#grid-wrap{flex:1;overflow-y:auto;padding:16px;user-select:none}
-#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-.card{position:relative;background:var(--surface);border:2px solid transparent;border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .12s,transform .12s,box-shadow .12s}
-.card:hover{border-color:var(--border);transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.35)}
-.card.selected{border-color:var(--select-bd)!important;background:var(--select-bg);box-shadow:0 0 0 1px var(--select-bd)}
-.thumb-wrap{width:100%;aspect-ratio:1;overflow:hidden;background:var(--surface2);display:flex;align-items:center;justify-content:center}
-.thumb-wrap img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .2s}
-.thumb-wrap img.loading{opacity:0}
-.card-name{padding:7px 9px;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.check{position:absolute;top:8px;left:8px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);border:2px solid rgba(255,255,255,.4);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s}
-.card:hover .check,.card.selected .check{opacity:1}
-.card.selected .check{background:var(--accent);border-color:var(--accent)}
-.check svg{width:11px;height:11px;stroke:#fff;stroke-width:2.5;fill:none}
-#preview{width:0;flex-shrink:0;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;transition:width .22s ease}
-#preview.open{width:420px}
-#prev-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
-#prev-close{background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;padding:2px 6px;border-radius:6px;transition:background .15s,color .15s}
-#prev-close:hover{background:var(--surface2);color:var(--text)}
-#prev-nav{display:flex;gap:6px}
-.nav-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:6px;width:32px;height:32px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:background .12s;line-height:1}
-.nav-btn:hover{background:var(--border)}
-.nav-btn:disabled{opacity:.3;cursor:default}
-#prev-img-wrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:12px;background:#0d0f11}
-#prev-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;box-shadow:0 4px 24px rgba(0,0,0,.5)}
-#prev-info{flex-shrink:0;padding:12px 14px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);word-break:break-all;line-height:1.6}
+#btn-delete:hover{background:var(--danger-dk)}
+#user-chip{display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;border-left:1px solid var(--border);margin-left:4px}
+#user-chip span{font-size:13px;color:var(--muted)}
+#user-chip a{padding:6px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:12px;text-decoration:none;transition:color .15s}
+#user-chip a:hover{color:var(--text)}
+
+/* grid */
+#grid-wrap{flex:1;overflow-y:auto;padding:14px;user-select:none}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
 #empty{display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;height:280px;color:var(--muted);font-size:15px;grid-column:1/-1}
 #empty svg{width:48px;height:48px;opacity:.3}
-::-webkit-scrollbar{width:6px}
-::-webkit-scrollbar-track{background:transparent}
+
+/* card */
+.card{position:relative;background:var(--surface);border:2px solid transparent;border-radius:10px;overflow:hidden;transition:border-color .12s,transform .12s,box-shadow .12s}
+.card:hover{border-color:var(--border);transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.35)}
+.card.selected{border-color:var(--sel-bd)!important;background:var(--sel-bg);box-shadow:0 0 0 1px var(--sel-bd)}
+.thumb-wrap{width:100%;aspect-ratio:1;overflow:hidden;background:var(--surface2);display:flex;align-items:center;justify-content:center;cursor:zoom-in}
+.thumb-wrap img{width:100%;height:100%;object-fit:cover;display:block;transition:opacity .2s}
+.thumb-wrap img.loading{opacity:0}
+.card-name{padding:5px 9px 7px;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* card checkbox */
+.chkbox{position:absolute;top:8px;left:8px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.55);border:2px solid rgba(255,255,255,.35);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s,border-color .12s,opacity .12s;z-index:2;opacity:.6}
+.card:hover .chkbox{opacity:1}
+.card.selected .chkbox{background:var(--accent);border-color:var(--accent);opacity:1}
+.chkbox svg{width:11px;height:11px;stroke:#fff;stroke-width:3;fill:none;opacity:0;transition:opacity .12s}
+.card.selected .chkbox svg{opacity:1}
+
+/* tag pills on card */
+.card-tags{position:absolute;bottom:30px;left:6px;right:6px;display:flex;gap:3px;flex-wrap:nowrap;overflow:hidden;pointer-events:none}
+.ctag{background:rgba(79,142,247,.75);color:#fff;font-size:10px;padding:2px 7px;border-radius:20px;white-space:nowrap;max-width:80px;overflow:hidden;text-overflow:ellipsis;backdrop-filter:blur(4px)}
+.ctag.auto{background:rgba(100,100,200,.55)}
+
+/* ── LIGHTBOX ── */
+#lb{position:fixed;inset:0;z-index:500;display:flex;align-items:stretch;background:rgba(5,6,8,.96);opacity:0;pointer-events:none;transition:opacity .2s}
+#lb.open{opacity:1;pointer-events:all}
+#lb-bg{position:absolute;inset:0;cursor:pointer;z-index:0}
+#lb-wrap{display:flex;width:100%;height:100%;position:relative;z-index:1}
+#lb-img-area{flex:1;display:flex;align-items:center;justify-content:center;padding:60px 20px 20px;position:relative;min-width:0}
+#lb-img{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,.6);display:block}
+#lb-close{position:fixed;top:14px;right:14px;z-index:10;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;width:36px;height:36px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s}
+#lb-close:hover{background:rgba(255,255,255,.18)}
+.lb-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff;border-radius:10px;width:44px;height:64px;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s;z-index:2}
+.lb-nav:hover{background:rgba(255,255,255,.18)}
+.lb-nav:disabled{opacity:.2;cursor:default}
+#lb-prev{left:12px}
+#lb-next{right:12px}
+
+/* lb info panel */
+#lb-info{width:300px;flex-shrink:0;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;padding:20px 16px;gap:18px;padding-top:60px}
+#lb-fname{font-size:13px;font-weight:600;color:var(--text);word-break:break-all;line-height:1.5}
+#lb-fpath{font-size:11px;color:var(--muted);word-break:break-all;line-height:1.5}
+.lb-sec-title{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+#lb-taglist{display:flex;flex-wrap:wrap;gap:6px;min-height:24px}
+.lbtag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:rgba(79,142,247,.15);border:1px solid rgba(79,142,247,.3);border-radius:20px;font-size:12px;color:var(--accent);white-space:nowrap}
+.lbtag.auto-tag{background:rgba(100,100,200,.12);border-color:rgba(100,100,200,.3);color:#9aa0ff}
+.lbtag-x{cursor:pointer;opacity:.6;font-size:14px;line-height:1;padding:0 2px;transition:opacity .12s}
+.lbtag-x:hover{opacity:1}
+.lbtag-autobtn{cursor:pointer;background:rgba(255,255,255,.06);border:none;border-radius:4px;padding:2px 5px;color:inherit;font-size:10px;line-height:1;transition:background .12s}
+.lbtag-autobtn:hover{background:rgba(255,255,255,.14)}
+#lb-tag-form{display:flex;gap:6px;margin-top:2px}
+#lb-tag-input{flex:1;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:13px;outline:none;transition:border-color .12s}
+#lb-tag-input:focus{border-color:var(--accent)}
+#lb-tag-add{padding:8px 12px;background:var(--accent);border:none;border-radius:7px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .12s}
+#lb-tag-add:hover{background:var(--accent-dk)}
+#lb-autotag-status{font-size:12px;color:var(--muted);line-height:1.5;min-height:20px;margin-top:4px}
+
+/* toast */
+#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1e2227;border:1px solid var(--border);color:var(--text);padding:10px 22px;border-radius:10px;font-size:13px;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transition:opacity .2s;pointer-events:none;z-index:999;white-space:nowrap}
+#toast.show{opacity:1}
+#toast.err{border-color:var(--danger);color:#f08080}
+
+/* scrollbar */
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--muted)}
-#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:#1e2227;border:1px solid var(--border);color:var(--text);padding:10px 22px;border-radius:10px;font-size:13px;box-shadow:0 4px 20px rgba(0,0,0,.4);opacity:0;transition:opacity .2s;pointer-events:none;z-index:999}
-#toast.show{opacity:1}
 </style>
 </head>
 <body>
 <div id="app">
+  <!-- sidebar -->
   <aside id="sidebar">
     <div id="sidebar-title">Categories</div>
     <div id="cat-list">
     {% for c in categories %}
-      <button class="cat-btn" data-cat="{{ c.name }}" onclick="loadCategory('{{ c.name }}')">
+      <button class="cat-btn" data-cat="{{ c.name }}" onclick="loadCat('{{ c.name }}')">
         <span>{{ c.name }}</span>
         <span class="cat-count">{{ c.count }}</span>
       </button>
     {% endfor %}
     </div>
   </aside>
+
+  <!-- main -->
   <div id="main">
     <div id="topbar">
       <span id="cat-label">Select a category</span>
       <div id="spacer"></div>
+      <div id="dedup-banner"></div>
       <div id="sel-badge"><span id="sel-count">0</span><span>selected</span></div>
-      <button id="btn-clear" onclick="clearSelection()">Clear</button>
-      <button id="btn-delete" onclick="deleteSelected()">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-          <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
-        </svg>
+      <button id="btn-dedup" class="tbtn" onclick="runDedup()">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="9" r="7"/><circle cx="15" cy="15" r="7"/></svg>
+        Find Duplicates
+      </button>
+      <button id="btn-clear"  class="tbtn" onclick="clearSel()">Clear</button>
+      <button id="btn-delete" class="tbtn" onclick="deleteSel()">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
         Delete Selected
       </button>
-      <div style="display:flex;align-items:center;gap:8px;padding-left:8px;border-left:1px solid var(--border)">
-        <span style="font-size:13px;color:var(--muted)">{{ username }}</span>
-        <a href="/logout" style="padding:7px 13px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;color:var(--muted);font-size:12px;text-decoration:none;transition:color .15s" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--muted)'">Sign out</a>
+      <div id="user-chip">
+        <span>{{ username }}</span>
+        <a href="/logout">Sign out</a>
       </div>
     </div>
     <div id="grid-wrap">
       <div id="grid">
         <div id="empty">
-          <svg fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
-            <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
-            <polyline points="21 15 16 10 5 21"/>
-          </svg>
+          <svg fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
           <span>No images here</span>
         </div>
       </div>
     </div>
   </div>
-  <div id="preview">
-    <div id="prev-head">
-      <div id="prev-nav">
-        <button class="nav-btn" id="btn-prev" title="Previous" onclick="prevImage()">&#8592;</button>
-        <button class="nav-btn" id="btn-next" title="Next" onclick="nextImage()">&#8594;</button>
-      </div>
-      <button id="prev-close" onclick="closePreview()" title="Close">&#10005;</button>
-    </div>
-    <div id="prev-img-wrap"><img id="prev-img" src="" alt=""></div>
-    <div id="prev-info"></div>
-  </div>
 </div>
+
+<!-- lightbox -->
+<div id="lb">
+  <div id="lb-bg" onclick="closeLb()"></div>
+  <div id="lb-wrap">
+    <div id="lb-img-area">
+      <button class="lb-nav" id="lb-prev" onclick="lbNav(-1)">&#8592;</button>
+      <img id="lb-img" src="" alt="">
+      <button class="lb-nav" id="lb-next" onclick="lbNav(1)">&#8594;</button>
+    </div>
+    <aside id="lb-info">
+      <div id="lb-fname"></div>
+      <div id="lb-fpath"></div>
+      <div>
+        <div class="lb-sec-title">Tags</div>
+        <div id="lb-taglist"></div>
+        <div id="lb-tag-form" style="margin-top:10px">
+          <input id="lb-tag-input" placeholder="Add tag…" type="text"
+                 onkeydown="if(event.key==='Enter')lbAddTag()">
+          <button id="lb-tag-add" onclick="lbAddTag()">Add</button>
+        </div>
+        <div id="lb-autotag-status"></div>
+      </div>
+    </aside>
+  </div>
+  <button id="lb-close" onclick="closeLb()">&#10005;</button>
+</div>
+
 <div id="toast"></div>
+
 <script>
-const state={category:null,page:0,loading:false,done:false,cards:[],selected:new Set(),previewIdx:-1};
-let isPainting=false,paintMode=null;
-const gridEl=document.getElementById('grid');
-const gridWrap=document.getElementById('grid-wrap');
-const preview=document.getElementById('preview');
-const prevImg=document.getElementById('prev-img');
-const prevInfo=document.getElementById('prev-info');
-const selBadge=document.getElementById('sel-badge');
-const selCount=document.getElementById('sel-count');
-const btnDelete=document.getElementById('btn-delete');
-const btnClear=document.getElementById('btn-clear');
-const catLabel=document.getElementById('cat-label');
-const toast=document.getElementById('toast');
-const emptyEl=document.getElementById('empty');
-const sentinel=document.createElement('div');
-sentinel.id='sentinel';sentinel.style.height='40px';sentinel.style.gridColumn='1/-1';
+// ── state ──────────────────────────────────────────────────────────────
+const S = {
+  cat: null, page: 0, loading: false, done: false,
+  cards: [],            // ordered card DOM elements
+  selected: new Set(),  // selected card elements
+  lb: { idx: -1, hash: null, jobId: null, poll: null }
+};
+let painting = false, paintMode = null;
+
+// ── DOM ────────────────────────────────────────────────────────────────
+const gridEl   = document.getElementById('grid');
+const gridWrap = document.getElementById('grid-wrap');
+const lbEl     = document.getElementById('lb');
+const lbImg    = document.getElementById('lb-img');
+const lbFname  = document.getElementById('lb-fname');
+const lbFpath  = document.getElementById('lb-fpath');
+const lbTags   = document.getElementById('lb-taglist');
+const lbStatus = document.getElementById('lb-autotag-status');
+const emptyEl  = document.getElementById('empty');
+const toast    = document.getElementById('toast');
+const selBadge = document.getElementById('sel-badge');
+const selCount = document.getElementById('sel-count');
+const btnDel   = document.getElementById('btn-delete');
+const btnClr   = document.getElementById('btn-clear');
+const btnDedup = document.getElementById('btn-dedup');
+const dedupBanner = document.getElementById('dedup-banner');
+
+// ── Sentinel (infinite scroll) ─────────────────────────────────────────
+const sentinel = Object.assign(document.createElement('div'),
+  {id:'sentinel', style:'height:40px;grid-column:1/-1'});
 gridEl.appendChild(sentinel);
-const io=new IntersectionObserver(e=>{if(e[0].isIntersecting&&!state.loading&&!state.done)loadMore();},{root:gridWrap,threshold:0.1});
-io.observe(sentinel);
-function loadCategory(name){
-  if(state.category===name)return;
-  state.category=name;state.page=0;state.done=false;state.cards=[];state.selected.clear();
-  updateUI();closePreview();catLabel.textContent=name;
-  while(gridEl.firstChild&&gridEl.firstChild!==sentinel)gridEl.removeChild(gridEl.firstChild);
-  emptyEl.style.display='none';gridEl.appendChild(sentinel);
-  document.querySelectorAll('.cat-btn').forEach(b=>b.classList.toggle('active',b.dataset.cat===name));
+new IntersectionObserver(e => {
+  if (e[0].isIntersecting && !S.loading && !S.done) loadMore();
+}, {root: gridWrap, threshold: 0.1}).observe(sentinel);
+
+// ── Category load ──────────────────────────────────────────────────────
+function loadCat(name) {
+  if (S.cat === name) return;
+  S.cat = name; S.page = 0; S.done = false; S.cards = [];
+  S.selected.clear(); updateUI(); closeLb();
+  document.getElementById('cat-label').textContent = name;
+  while (gridEl.firstChild && gridEl.firstChild !== sentinel)
+    gridEl.removeChild(gridEl.firstChild);
+  emptyEl.style.display = 'none';
+  gridEl.appendChild(sentinel);
+  dedupBanner.className = '';
+  document.querySelectorAll('.cat-btn')
+    .forEach(b => b.classList.toggle('active', b.dataset.cat === name));
+  btnDedup.classList.add('show');
   loadMore();
 }
-async function loadMore(){
-  if(state.loading||state.done)return;
-  state.loading=true;
-  try{
-    const res=await fetch('/api/files/'+encodeURIComponent(state.category)+'?page='+state.page);
-    const rows=await res.json();
-    if(rows.length===0){state.done=true;if(state.cards.length===0)emptyEl.style.display='flex';return;}
-    rows.forEach(r=>addCard(r));
-    state.page++;
-    if(rows.length<60)state.done=true;
-  }finally{state.loading=false;}
+
+async function loadMore() {
+  if (S.loading || S.done) return;
+  S.loading = true;
+  try {
+    const res  = await fetch('/api/files/' + encodeURIComponent(S.cat) + '?page=' + S.page);
+    const rows = await res.json();
+    if (!rows.length) {
+      S.done = true;
+      if (!S.cards.length) emptyEl.style.display = 'flex';
+      return;
+    }
+    rows.forEach(r => addCard(r));
+    S.page++;
+    if (rows.length < 60) S.done = true;
+  } finally { S.loading = false; }
 }
-const CHECK='<svg viewBox="0 0 12 10"><polyline points="1,5 4,8 11,1"/></svg>';
-function addCard(row){
-  const card=document.createElement('div');
-  card.className='card';card.dataset.path=row.path;card.dataset.name=row.name;
-  const wrap=document.createElement('div');wrap.className='thumb-wrap';
-  const img=document.createElement('img');
-  img.className='loading';img.dataset.src='/thumb?p='+encodeURIComponent(row.path);
-  img.alt=row.name;img.draggable=false;
-  img.onload=()=>img.classList.remove('loading');
-  const check=document.createElement('div');check.className='check';check.innerHTML=CHECK;
-  const label=document.createElement('div');label.className='card-name';label.textContent=row.name;
-  wrap.appendChild(img);card.appendChild(wrap);card.appendChild(check);card.appendChild(label);
-  gridEl.insertBefore(card,sentinel);
-  const imgObs=new IntersectionObserver((e,o)=>{if(e[0].isIntersecting){img.src=img.dataset.src;o.disconnect();}},{root:gridWrap,rootMargin:'200px'});
-  imgObs.observe(card);
-  card.addEventListener('mousedown',e=>{
-    if(e.button!==0)return;e.preventDefault();
-    isPainting=true;paintMode=card.classList.contains('selected')?'deselect':'select';
+
+// ── Card creation ──────────────────────────────────────────────────────
+function addCard(row) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.path = row.path;
+  card.dataset.name = row.name;
+  card.dataset.hash = row.hash;
+  card.dataset.id   = row.id;
+
+  // thumb
+  const wrap = document.createElement('div');
+  wrap.className = 'thumb-wrap';
+  const img = document.createElement('img');
+  img.className = 'loading'; img.alt = row.name; img.draggable = false;
+  img.dataset.src = '/thumb?p=' + encodeURIComponent(row.path);
+  img.onload = () => img.classList.remove('loading');
+  wrap.appendChild(img);
+
+  // checkbox
+  const chk = document.createElement('div');
+  chk.className = 'chkbox';
+  chk.innerHTML = '<svg viewBox="0 0 12 10"><polyline points="1,5 4,8 11,1"/></svg>';
+
+  // tag pills overlay
+  const tagWrap = document.createElement('div');
+  tagWrap.className = 'card-tags';
+  if (row.tags && row.tags.length)
+    row.tags.slice(0,4).forEach(t => {
+      const pill = document.createElement('span');
+      pill.className = 'ctag' + (t.manual ? '' : ' auto');
+      pill.textContent = t.name; tagWrap.appendChild(pill);
+    });
+
+  // label
+  const lbl = document.createElement('div');
+  lbl.className = 'card-name'; lbl.textContent = row.name;
+
+  card.appendChild(wrap); card.appendChild(chk);
+  card.appendChild(tagWrap); card.appendChild(lbl);
+  gridEl.insertBefore(card, sentinel);
+
+  // lazy thumb load
+  const obs = new IntersectionObserver((en, o) => {
+    if (en[0].isIntersecting) { img.src = img.dataset.src; o.disconnect(); }
+  }, {root: gridWrap, rootMargin: '200px'});
+  obs.observe(card);
+
+  // ── events ──
+  // Click on thumb = lightbox
+  wrap.addEventListener('click', e => {
+    e.stopPropagation();
+    openLb(S.cards.indexOf(card));
+  });
+
+  // Checkbox click = toggle select
+  chk.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleSel(card); updateUI();
+  });
+
+  // Mousedown on checkbox = start paint
+  chk.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    painting = true;
+    paintMode = card.classList.contains('selected') ? 'deselect' : 'select';
     applyPaint(card);
   });
-  card.addEventListener('mouseenter',()=>{if(isPainting)applyPaint(card);});
-  card.addEventListener('dblclick',e=>{e.preventDefault();openPreview(state.cards.indexOf(card));});
-  state.cards.push(card);
+
+  // Enter while painting = paint this card
+  card.addEventListener('mouseenter', () => { if (painting) applyPaint(card); });
+
+  S.cards.push(card);
 }
-document.addEventListener('mouseup',()=>{isPainting=false;});
-function applyPaint(card){
-  if(paintMode==='select'){card.classList.add('selected');state.selected.add(card);}
-  else{card.classList.remove('selected');state.selected.delete(card);}
+
+document.addEventListener('mouseup', () => { painting = false; });
+
+// ── Selection ──────────────────────────────────────────────────────────
+function toggleSel(card) {
+  if (card.classList.contains('selected')) {
+    card.classList.remove('selected'); S.selected.delete(card);
+  } else {
+    card.classList.add('selected'); S.selected.add(card);
+  }
+}
+function applyPaint(card) {
+  if (paintMode === 'select') { card.classList.add('selected'); S.selected.add(card); }
+  else { card.classList.remove('selected'); S.selected.delete(card); }
   updateUI();
 }
-function updateUI(){
-  const n=state.selected.size;
-  selCount.textContent=n;
-  selBadge.classList.toggle('show',n>0);
-  btnDelete.classList.toggle('show',n>0);
-  btnClear.classList.toggle('show',n>0);
+function updateUI() {
+  const n = S.selected.size;
+  selCount.textContent = n;
+  selBadge.classList.toggle('show', n > 0);
+  btnDel.classList.toggle('show', n > 0);
+  btnClr.classList.toggle('show', n > 0);
 }
-function clearSelection(){state.selected.forEach(c=>c.classList.remove('selected'));state.selected.clear();updateUI();}
-async function deleteSelected(){
-  const paths=[...state.selected].map(c=>c.dataset.path);
-  if(!paths.length)return;
-  btnDelete.disabled=true;
-  const orig=btnDelete.innerHTML;
-  btnDelete.innerHTML='Deleting\u2026';
-  try{
-    const res=await fetch('/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths})});
-    const data=await res.json();
-    state.selected.forEach(card=>{
-      const idx=state.cards.indexOf(card);
-      if(idx!==-1)state.cards.splice(idx,1);
-      card.remove();
+function clearSel() { S.selected.forEach(c => c.classList.remove('selected')); S.selected.clear(); updateUI(); }
+
+// ── Delete selected ────────────────────────────────────────────────────
+async function deleteSel() {
+  const paths = [...S.selected].map(c => c.dataset.path);
+  if (!paths.length) return;
+  btnDel.disabled = true;
+  try {
+    const r = await fetch('/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({paths})});
+    const d = await r.json();
+    S.selected.forEach(c => { const i = S.cards.indexOf(c); if (i!==-1) S.cards.splice(i,1); c.remove(); });
+    S.selected.clear(); updateUI();
+    showToast('Deleted ' + d.deleted + ' file' + (d.deleted!==1?'s':''));
+    if (S.lb.idx >= S.cards.length) closeLb();
+  } catch(e) { showToast('Delete failed', true); }
+  finally { btnDel.disabled = false; }
+}
+
+// ── Dedup ──────────────────────────────────────────────────────────────
+async function runDedup() {
+  if (!S.cat) return;
+  btnDedup.classList.add('loading'); btnDedup.textContent = 'Scanning…';
+  try {
+    const r = await fetch('/api/dedup/' + encodeURIComponent(S.cat), {method:'POST'});
+    const d = await r.json();
+    if (d.deleted > 0) {
+      dedupBanner.className = 'show';
+      dedupBanner.textContent = '\u2713 Removed ' + d.deleted + ' duplicate' + (d.deleted!==1?'s':'') + '.  Reloading…';
+      // Reload grid
+      await new Promise(res => setTimeout(res, 800));
+      S.page = 0; S.done = false; S.cards = [];
+      S.selected.clear(); updateUI();
+      while (gridEl.firstChild && gridEl.firstChild !== sentinel) gridEl.removeChild(gridEl.firstChild);
+      gridEl.appendChild(sentinel); loadMore();
+    } else {
+      dedupBanner.className = 'show';
+      dedupBanner.textContent = '\u2713 No duplicates found in ' + S.cat;
+    }
+  } catch(e) { showToast('Dedup failed', true); }
+  finally {
+    btnDedup.classList.remove('loading');
+    btnDedup.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="9" cy="9" r="7"/><circle cx="15" cy="15" r="7"/></svg> Find Duplicates';
+  }
+}
+
+// ── Lightbox ───────────────────────────────────────────────────────────
+function openLb(idx) {
+  if (idx < 0 || idx >= S.cards.length) return;
+  S.lb.idx = idx;
+  const card = S.cards[idx];
+  S.lb.hash = card.dataset.hash;
+  lbImg.src = '/img?p=' + encodeURIComponent(card.dataset.path);
+  lbFname.textContent = card.dataset.name;
+  lbFpath.textContent = card.dataset.path;
+  document.getElementById('lb-prev').disabled = idx === 0;
+  document.getElementById('lb-next').disabled = idx === S.cards.length - 1;
+  lbEl.classList.add('open');
+  loadLbTags(card.dataset.hash);
+  document.getElementById('lb-tag-input').value = '';
+  lbStatus.textContent = '';
+}
+function closeLb() {
+  lbEl.classList.remove('open');
+  S.lb.idx = -1; S.lb.hash = null;
+  if (S.lb.poll) { clearInterval(S.lb.poll); S.lb.poll = null; }
+}
+function lbNav(dir) {
+  const ni = S.lb.idx + dir;
+  if (ni >= 0 && ni < S.cards.length) openLb(ni);
+}
+
+// Tags in lightbox
+async function loadLbTags(hash) {
+  lbTags.innerHTML = '';
+  try {
+    const r = await fetch('/api/file/' + encodeURIComponent(hash) + '/tags');
+    if (!r.ok) return;
+    const tags = await r.json();
+    renderLbTags(hash, tags);
+  } catch(e) {}
+}
+function renderLbTags(hash, tags) {
+  lbTags.innerHTML = '';
+  tags.forEach(t => {
+    const pill = document.createElement('div');
+    pill.className = 'lbtag' + (t.manual ? '' : ' auto-tag');
+    pill.innerHTML = '<span>' + esc(t.name) + '</span>';
+    if (!t.manual) pill.title = 'Auto-tagged (' + Math.round(t.confidence*100) + '% similar)';
+    // auto-tag button (only on manual tags)
+    if (t.manual) {
+      const ab = document.createElement('button');
+      ab.className = 'lbtag-autobtn'; ab.title = 'Auto-tag similar photos with "' + t.name + '"';
+      ab.textContent = '\uD83D\uDD0D'; // 🔍
+      ab.onclick = () => lbAutoTag(t.name);
+      pill.appendChild(ab);
+    }
+    // remove button
+    const xb = document.createElement('span');
+    xb.className = 'lbtag-x'; xb.textContent = '\u00D7';
+    xb.onclick = () => lbRemoveTag(hash, t.name);
+    pill.appendChild(xb);
+    lbTags.appendChild(pill);
+  });
+}
+async function lbAddTag() {
+  const inp  = document.getElementById('lb-tag-input');
+  const name = inp.value.trim();
+  if (!name || !S.lb.hash) return;
+  inp.value = '';
+  try {
+    await fetch('/api/tag', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({hash: S.lb.hash, tag: name})});
+    loadLbTags(S.lb.hash);
+    // update card pills
+    refreshCardTags(S.lb.hash);
+    showToast('Tag "' + name + '" added. Click \uD83D\uDD0D next to it to auto-tag similar photos.');
+  } catch(e) { showToast('Failed to add tag', true); }
+}
+async function lbRemoveTag(hash, name) {
+  try {
+    await fetch('/api/tag', {method:'DELETE', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({hash, tag: name})});
+    loadLbTags(hash); refreshCardTags(hash);
+  } catch(e) { showToast('Failed to remove tag', true); }
+}
+async function lbAutoTag(tagName) {
+  if (!S.lb.hash || !S.cat) return;
+  if (S.lb.poll) clearInterval(S.lb.poll);
+  lbStatus.textContent = 'Starting auto-tag…';
+  try {
+    const r = await fetch('/api/autotag', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({hash: S.lb.hash, tag: tagName, category: S.cat})});
+    const d = await r.json();
+    if (!d.job_id) { lbStatus.textContent = 'Error starting job'; return; }
+    S.lb.jobId = d.job_id;
+    S.lb.poll  = setInterval(() => pollAutoTag(d.job_id, tagName), 1500);
+  } catch(e) { lbStatus.textContent = 'Error: ' + e.message; }
+}
+async function pollAutoTag(jobId, tagName) {
+  try {
+    const r = await fetch('/api/autotag/status/' + jobId);
+    const d = await r.json();
+    if (d.status === 'done') {
+      clearInterval(S.lb.poll); S.lb.poll = null;
+      lbStatus.textContent = '\u2713 Auto-tagged ' + d.tagged + ' similar photo' + (d.tagged!==1?'s':'') + ' with "' + tagName + '"';
+      // Refresh all visible card tags
+      S.cards.forEach(c => refreshCardTags(c.dataset.hash));
+    } else if (d.status && d.status.startsWith('error')) {
+      clearInterval(S.lb.poll); S.lb.poll = null;
+      lbStatus.textContent = d.status;
+    } else {
+      const pct = d.total ? Math.round(d.progress / d.total * 100) : 0;
+      lbStatus.textContent = d.status + (d.total ? ' (' + pct + '%)' : '');
+    }
+  } catch(e) {}
+}
+async function refreshCardTags(hash) {
+  try {
+    const r = await fetch('/api/file/' + encodeURIComponent(hash) + '/tags');
+    if (!r.ok) return;
+    const tags = await r.json();
+    const card = S.cards.find(c => c.dataset.hash === hash);
+    if (!card) return;
+    let tw = card.querySelector('.card-tags');
+    if (!tw) { tw = document.createElement('div'); tw.className = 'card-tags'; card.appendChild(tw); }
+    tw.innerHTML = '';
+    tags.slice(0, 4).forEach(t => {
+      const p = document.createElement('span');
+      p.className = 'ctag' + (t.manual ? '' : ' auto');
+      p.textContent = t.name; tw.appendChild(p);
     });
-    state.selected.clear();updateUI();
-    showToast('Deleted '+data.deleted+' file'+(data.deleted!==1?'s':''));
-    if(state.previewIdx>=state.cards.length)closePreview();
-  }catch(err){showToast('Delete failed \u2014 '+err.message);}
-  finally{btnDelete.disabled=false;btnDelete.innerHTML=orig;}
+    // If this is the currently open lb photo, refresh lb tags too
+    if (S.lb.hash === hash) renderLbTags(hash, tags);
+  } catch(e) {}
 }
-function openPreview(idx){
-  if(idx<0||idx>=state.cards.length)return;
-  state.previewIdx=idx;
-  const card=state.cards[idx];
-  prevImg.src='/img?p='+encodeURIComponent(card.dataset.path);
-  prevInfo.textContent=card.dataset.name+'\n\n'+card.dataset.path;
-  document.getElementById('btn-prev').disabled=idx===0;
-  document.getElementById('btn-next').disabled=idx===state.cards.length-1;
-  preview.classList.add('open');
-}
-function closePreview(){preview.classList.remove('open');state.previewIdx=-1;}
-function prevImage(){if(state.previewIdx>0)openPreview(state.previewIdx-1);}
-function nextImage(){if(state.previewIdx<state.cards.length-1)openPreview(state.previewIdx+1);}
-document.addEventListener('keydown',e=>{
-  if(!preview.classList.contains('open'))return;
-  if(e.key==='ArrowLeft')prevImage();
-  if(e.key==='ArrowRight')nextImage();
-  if(e.key==='Escape')closePreview();
+
+// ── Keyboard ───────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (!lbEl.classList.contains('open')) return;
+  if (e.key === 'ArrowLeft')  lbNav(-1);
+  if (e.key === 'ArrowRight') lbNav(1);
+  if (e.key === 'Escape')     closeLb();
 });
-let toastTimer;
-function showToast(msg){
-  toast.textContent=msg;toast.classList.add('show');
-  clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.classList.remove('show'),3000);
+
+// ── Toast ──────────────────────────────────────────────────────────────
+let toastT;
+function showToast(msg, err=false) {
+  toast.textContent = msg;
+  toast.className = 'show' + (err ? ' err' : '');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => { toast.className = ''; }, 3500);
 }
-const firstCat=document.querySelector('.cat-btn');
-if(firstCat)loadCategory(firstCat.dataset.cat);
+function esc(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// ── Boot ───────────────────────────────────────────────────────────────
+const firstCat = document.querySelector('.cat-btn');
+if (firstCat) loadCat(firstCat.dataset.cat);
 </script>
 </body>
 </html>
