@@ -327,13 +327,7 @@ function addCard(row) {
     openLb(S.cards.indexOf(card));
   });
 
-  // Checkbox click = toggle select
-  chk.addEventListener('click', e => {
-    e.stopPropagation();
-    toggleSel(card); updateUI();
-  });
-
-  // Mousedown on checkbox = start paint
+  // Mousedown on checkbox = start paint (no separate click handler - prevents double-fire)
   chk.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();

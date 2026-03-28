@@ -10,7 +10,7 @@ ALLOWED_ROOT      = "/mnt/c/photo/"
 THUMB_DIR         = Path("/tmp/gi_thumbs")
 THUMB_SIZE        = (300, 300)
 PAGE_SIZE         = 60
-AUTOTAG_THRESHOLD = 0.82
+AUTOTAG_THRESHOLD = 0.72
 
 DB_CFG = dict(host="localhost", user="root", password="zerocall",
               database="photo_manager", autocommit=False, connection_timeout=10)
@@ -170,16 +170,18 @@ def api_files(category):
     if rows:
         ids  = [r["id"] for r in rows]
         fmt  = ",".join(["%s"] * len(ids))
-        cur.execute(
+        tmap = {}
+        tcur = db.cursor()   # plain cursor - returns tuples
+        tcur.execute(
             "SELECT ft.file_id, t.name, ft.confidence, ft.is_manual "
             "FROM file_tags ft JOIN tags t ON ft.tag_id = t.id "
             "WHERE ft.file_id IN (" + fmt + ")", ids
         )
-        tmap = {}
-        for fid, tname, conf, manual in cur.fetchall():
+        for fid, tname, conf, manual in tcur.fetchall():
             tmap.setdefault(fid, []).append(
                 {"name": tname, "confidence": round(float(conf), 2), "manual": bool(manual)}
             )
+        tcur.close()
         for r in rows:
             r["tags"] = tmap.get(r["id"], [])
     cur.close(); db.close()
@@ -222,6 +224,26 @@ def dedup_category(category):
                 pass
     db.commit(); cur.close(); db.close()
     return jsonify({"deleted": len(deleted), "sample": deleted[:10]})
+
+
+@app.route("/api/file/<hash_>/tags")
+@login_required
+def file_tags_by_hash(hash_):
+    db  = get_db(); cur = db.cursor()
+    cur.execute("SELECT id FROM files WHERE hash=%s", (hash_,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); db.close()
+        return jsonify([])
+    cur.execute(
+        "SELECT t.name, ft.confidence, ft.is_manual "
+        "FROM file_tags ft JOIN tags t ON ft.tag_id = t.id "
+        "WHERE ft.file_id = %s ORDER BY ft.is_manual DESC, t.name", (row[0],)
+    )
+    tags = [{"name": r[0], "confidence": round(float(r[1]), 2), "manual": bool(r[2])}
+            for r in cur.fetchall()]
+    cur.close(); db.close()
+    return jsonify(tags)
 
 @app.route("/api/tags")
 @login_required
