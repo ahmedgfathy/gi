@@ -178,11 +178,14 @@ class DB:
         except Exception:
             sz = 0
         self.exec(
-            "INSERT INTO files (hash,path,name,category,file_type,size_bytes) "
-            "VALUES (%s,%s,%s,%s,%s,%s) "
-            "ON DUPLICATE KEY UPDATE path=%s, name=%s, category=COALESCE(%s,category), updated_at=NOW()",
-            (hash_, str(path), path.name, category, file_type, sz,
-             str(path), path.name, category)
+            "INSERT INTO files (hash,path,name,category,category_id,file_type,size_bytes) "
+            "VALUES (%s,%s,%s,%s,(SELECT id FROM categories WHERE name=%s),%s,%s) "
+            "ON DUPLICATE KEY UPDATE path=%s, name=%s, "
+            "category=COALESCE(%s,category), "
+            "category_id=COALESCE((SELECT id FROM categories WHERE name=%s),category_id), "
+            "updated_at=NOW()",
+            (hash_, str(path), path.name, category, category, file_type, sz,
+             str(path), path.name, category, category)
         )
 
     def update_path(self, hash_: str, new_path: Path, category: str = None):
@@ -195,6 +198,13 @@ class DB:
             self.exec(
                 "UPDATE files SET path=%s, name=%s, updated_at=NOW() WHERE hash=%s",
                 (str(new_path), new_path.name, hash_)
+            )
+
+    def ensure_categories(self, categories: list):
+        """Make sure all category names exist in the categories table."""
+        for name in categories:
+            self.exec(
+                "INSERT IGNORE INTO categories (name) VALUES (%s)", (name,)
             )
 
     def delete(self, hash_: str):
@@ -326,33 +336,9 @@ def process_files(files: list[Path], clf: Classifier, db: DB,
             log.warning("SKIP unhashable: %s", src.name)
             continue
 
-        # ── Dedup ─────────────────────────────────────────────────────────────
+        # ── Duplicate: already processed — skip (user manages dedup via Gallery UI)
         if h in known:
-            existing = known[h]
-            if existing == src:
-                # Same file, already registered — just make sure it's in DB
-                pass
-            elif existing.exists():
-                # Keep the better-named one
-                if copy_score(existing) <= copy_score(src):
-                    try:
-                        src.unlink()
-                        log.info("DEDUP  del copy: %-40s  kept: %s", src.name, existing.name)
-                    except Exception as exc:
-                        log.error("DEDUP fail %s: %s", src.name, exc)
-                    continue
-                else:
-                    try:
-                        existing.unlink()
-                        log.info("DEDUP  del old:  %-40s  kept: %s", existing.name, src.name)
-                    except Exception as exc:
-                        log.error("DEDUP fail %s: %s", existing.name, exc)
-                    known[h] = src
-                    db.update_path(h, src)
-            else:
-                # DB entry stale — update to current path
-                known[h] = src
-                db.update_path(h, src)
+            continue
 
         # ── Videos: stage directly to Videos/ ─────────────────────────────────
         if ext in VIDEO_EXTS:
@@ -415,6 +401,7 @@ def main():
     log  = setup_log()
     db   = DB(log)
     clf  = Classifier(log)
+    db.ensure_categories(list(CATEGORIES.keys()))
 
     log.info("=" * 66)
     log.info("Photo Service  v5.0  — Continuous Pipeline")

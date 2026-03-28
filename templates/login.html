@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo Gallery — Sign In</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#111315;--surface:#1c1f23;--border:#2e333b;--accent:#4f8ef7;--accent-dk:#3a6fd8;--danger:#e05252;--text:#e2e6ec;--muted:#7a8494;}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;display:flex;align-items:center;justify-content:center;}
+.card{width:360px;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:40px 36px;box-shadow:0 8px 40px rgba(0,0,0,.4);}
+.logo{text-align:center;margin-bottom:32px;}
+.logo svg{width:52px;height:52px;color:var(--accent);}
+.logo h1{font-size:20px;font-weight:700;margin-top:12px;color:var(--text);}
+.logo p{font-size:13px;color:var(--muted);margin-top:4px;}
+label{display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;}
+input[type=text],input[type=password]{
+  width:100%;padding:11px 14px;background:#252930;border:1px solid var(--border);
+  border-radius:8px;color:var(--text);font-size:14px;outline:none;
+  transition:border-color .15s,box-shadow .15s;
+}
+input[type=text]:focus,input[type=password]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(79,142,247,.18);}
+.field{margin-bottom:18px;}
+.error{background:rgba(224,82,82,.12);border:1px solid rgba(224,82,82,.3);color:#f08080;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:18px;}
+button[type=submit]{
+  width:100%;padding:12px;background:var(--accent);border:none;border-radius:9px;
+  color:#fff;font-size:15px;font-weight:700;cursor:pointer;
+  transition:background .15s,transform .1s;letter-spacing:.01em;
+}
+button[type=submit]:hover{background:var(--accent-dk);}
+button[type=submit]:active{transform:scale(.98);}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+      <rect x="2" y="3" width="20" height="18" rx="3"/>
+      <circle cx="8" cy="9" r="2"/>
+      <polyline points="22 15 16 9 8 18"/>
+      <polyline points="2 18 8 12"/>
+    </svg>
+    <h1>Photo Gallery</h1>
+    <p>Sign in to your account</p>
+  </div>
+
+  {% if error %}
+  <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST">
+    <div class="field">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username"
+             placeholder="Enter username" autofocus required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password"
+             placeholder="Enter password" required>
+    </div>
+    <button type="submit">Sign In</button>
+  </form>
+</div>
+</body>
+</html>
