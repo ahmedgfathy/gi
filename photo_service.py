@@ -1,36 +1,36 @@
 #!/usr/bin/env python3
 """
-photo_service.py  —  Unified Photo Service v3
-==============================================
-Pipeline for every image/video in C:\photo\ (root OR any subfolder):
-  1. DEDUP     — SHA256: delete exact byte-for-byte copies
-  2. MOVE      — Images/ or Videos/
-  3. CLASSIFY  — CLIP AI → People / Animals / Nature / Food /
-                            Vehicles / Architecture / Documents / Other
+photo_service.py  —  Unified Photo Service v5 (Continuous Pipeline)
+====================================================================
+ONE continuous loop that never stops:
 
-On startup:
-  - Deduplicates the ENTIRE tree
-  - Processes ALL files already in root / input subfolders
-  - Classifies images already staged in Images/ root
+  For every file not yet processed (path not in MySQL):
+    1. SHA256 hash (15s timeout per file)
+    2. Check DB → duplicate? → DELETE immediately
+    3. Unique? → stage to Images/ or Videos/ 
+    4. CLIP classify (batch of 32)
+    5. Move to Images/<Category>/
+    6. Save hash + path + category to MySQL
 
-Then polls every POLL_SECS for new arrivals — forever.
+All discovered files are processed in order — existing files at startup,
+then new arrivals, forever. MySQL stores every file so restarts are instant.
 """
 
-import os, sys, re, time, shutil, hashlib, logging, warnings
-from pathlib import Path
-from collections import defaultdict
-
+import os, sys, re, time, shutil, hashlib, logging, warnings, signal
+import mysql.connector
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["MPLBACKEND"] = "Agg"
 
-# ── Config ────────────────────────────────────────────────────────────────────
+from pathlib import Path
+
+# ── Config ─────────────────────────────────────────────────────────────────────
 WATCH_DIR  = Path("/mnt/c/photo")
 IMAGES_DIR = WATCH_DIR / "Images"
 VIDEOS_DIR = WATCH_DIR / "Videos"
 LOG_FILE   = WATCH_DIR / "photo_service.log"
-POLL_SECS  = 4
-BATCH_SIZE = 32   # images per CLIP batch
+POLL_SECS  = 5
+BATCH_SIZE = 32   # CLIP batch size
 
 IMAGE_EXTS = {".jpg",".jpeg",".png",".gif",".bmp",".tiff",".tif",
               ".webp",".heic",".heif",".avif",".cr2",".nef",
@@ -38,38 +38,37 @@ IMAGE_EXTS = {".jpg",".jpeg",".png",".gif",".bmp",".tiff",".tif",
 VIDEO_EXTS = {".mp4",".mov",".avi",".mkv",".wmv",".flv",".webm",
               ".m4v",".3gp",".3g2",".mts",".m2ts",".ts",".vob",
               ".ogv",".f4v",".rm",".rmvb"}
-SKIP_EXT   = {".log",".txt",".md",".csv",".json",".py",".sh",".pid",".db"}
-SKIP_PFX   = ("dedup_report","photo_service","watcher","classification",
-              "content_watcher")
+SKIP_EXT  = {".log",".txt",".md",".csv",".json",".py",".sh",".pid",".db"}
+SKIP_PFX  = ("dedup_report","photo_service","watcher","classification","content_watcher")
+OUTPUT_DIRS = {"Images","Videos"}
 
-# Output dirs — never pick up files from inside these as "new input"
-OUTPUT_DIRS = {"Images", "Videos"}
+DB_CONFIG = dict(
+    host="localhost", user="root", password="zerocall",
+    database="photo_manager", charset="utf8mb4",
+    connection_timeout=30, autocommit=True,
+)
 
 CATEGORIES = {
-    "People":       ["a photo of a person", "a portrait of a human face",
-                     "a selfie photo", "people together in a photo"],
-    "Animals":      ["a photo of an animal", "a dog or cat pet",
-                     "wildlife nature animals", "birds or fish in a photo"],
-    "Documents":    ["a document or written paper", "text printed on paper",
-                     "a screenshot of an app", "an ID card or certificate"],
-    "Nature":       ["a scenic landscape photo", "trees plants or flowers",
-                     "mountains sky or ocean", "outdoor nature photography"],
-    "Food":         ["food on a plate or bowl", "a cooked meal or dish",
-                     "beverage or drink", "cooking food ingredients"],
-    "Vehicles":     ["a car or automobile", "motorcycle or bicycle",
-                     "truck bus or van", "airplane ship or boat"],
-    "Architecture": ["a building or house exterior", "indoor room interior design",
-                     "architectural photo of structures", "city street or bridge"],
-    "Other":        ["an abstract or artistic photo", "a product on white background",
-                     "technology device or gadget", "random miscellaneous photo"],
+    "People":       ["a photo of a person","a portrait of a human face",
+                     "a selfie photo","people together in a photo"],
+    "Animals":      ["a photo of an animal","a dog or cat pet",
+                     "wildlife nature animals","birds or fish in a photo"],
+    "Documents":    ["a document or written paper","text printed on paper",
+                     "a screenshot of an app","an ID card or certificate"],
+    "Nature":       ["a scenic landscape photo","trees plants or flowers",
+                     "mountains sky or ocean","outdoor nature photography"],
+    "Food":         ["food on a plate or bowl","a cooked meal or dish",
+                     "beverage or drink","cooking food ingredients"],
+    "Vehicles":     ["a car or automobile","motorcycle or bicycle",
+                     "truck bus or van","airplane ship or boat"],
+    "Architecture": ["a building or house exterior","indoor room interior design",
+                     "architectural photo of structures","city street or bridge"],
+    "Other":        ["an abstract or artistic photo","a product on white background",
+                     "technology device or gadget","random miscellaneous photo"],
 }
 
-# ── Setup ─────────────────────────────────────────────────────────────────────
-def setup():
-    for d in [IMAGES_DIR, VIDEOS_DIR]:
-        d.mkdir(exist_ok=True)
-    for cat in CATEGORIES:
-        (IMAGES_DIR / cat).mkdir(exist_ok=True)
+# ── Logging ────────────────────────────────────────────────────────────────────
+def setup_log():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -81,79 +80,142 @@ def setup():
     )
     return logging.getLogger("photo_service")
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
 def skippable(entry) -> bool:
-    name = entry.name if hasattr(entry, 'name') else Path(entry).name
+    name = entry.name if hasattr(entry, "name") else Path(entry).name
     return (
         name.startswith(".")
         or any(name.startswith(p) for p in SKIP_PFX)
         or Path(name).suffix.lower() in SKIP_EXT
     )
 
-# ── File helpers ──────────────────────────────────────────────────────────────
-def sha256(path: Path):
+def _sigalrm(signum, frame):
+    raise TimeoutError("hash timeout")
+
+def sha256(path: Path) -> str | None:
     try:
+        signal.signal(signal.SIGALRM, _sigalrm)
+        signal.alarm(15)
         h = hashlib.sha256()
         with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
+            for chunk in iter(lambda: f.read(131072), b""):
                 h.update(chunk)
+        signal.alarm(0)
         return h.hexdigest()
     except Exception:
+        signal.alarm(0)
         return None
 
 def copy_score(path: Path) -> int:
-    """Lower score = more likely the original."""
-    n = path.stem
-    # Count total copy-suffix markers like (1)(2), (3), etc.
-    markers = re.findall(r'\((\d+)\)', n)
+    markers = re.findall(r'\((\d+)\)', path.stem)
     if not markers:
-        return len(n)               # no copy suffix = original
-    max_num = max(int(m) for m in markers)
-    if max_num >= 2:
-        return len(n) + 10000       # (2), (3), (4) etc = definitely a copy
-    return len(n) + 500             # (1) = likely a copy, but might be original
+        return len(path.stem)
+    return len(path.stem) + (10000 if max(int(m) for m in markers) >= 2 else 500)
 
 def unique_dest(dest: Path) -> Path:
     if not dest.exists():
         return dest
     i = 1
     while True:
-        c = dest.parent / f"{dest.stem}_new{i}{dest.suffix}"
+        c = dest.parent / f"{dest.stem}_u{i}{dest.suffix}"
         if not c.exists():
             return c
         i += 1
 
-def all_files_recursive(root: Path) -> list:
-    """All non-skipped files in entire tree."""
-    result = []
-    try:
-        for e in os.scandir(root):
-            if e.is_dir(follow_symlinks=False):
-                result.extend(all_files_recursive(Path(e.path)))
-            elif e.is_file() and not skippable(e):
-                result.append(Path(e.path))
-    except Exception:
-        pass
-    return result
+def try_rmdir(folder: Path):
+    if folder not in (WATCH_DIR, IMAGES_DIR, VIDEOS_DIR):
+        try:
+            if not any(True for _ in os.scandir(folder)):
+                folder.rmdir()
+        except Exception:
+            pass
 
-def scan_input_files(watch_dir: Path) -> list:
-    """
-    Files that need processing (not already in output destinations):
-    - Files directly in watch_dir root
-    - Files in any subfolder that is NOT Images/ or Videos/ or their children
-    """
+# ── MySQL ──────────────────────────────────────────────────────────────────────
+class DB:
+    def __init__(self, log):
+        self.log = log
+        self._conn = None
+
+    def connect(self):
+        try:
+            if self._conn and self._conn.is_connected():
+                self._conn.ping(reconnect=True, attempts=3, delay=1)
+                return self._conn
+        except Exception:
+            pass
+        self._conn = mysql.connector.connect(**DB_CONFIG)
+        return self._conn
+
+    def exec(self, sql, params=None, fetch=False):
+        for attempt in range(3):
+            try:
+                cur = self.connect().cursor()
+                cur.execute(sql, params or ())
+                if fetch:
+                    rows = cur.fetchall()
+                    cur.close()
+                    return rows
+                cur.close()
+                return
+            except mysql.connector.Error as e:
+                self.log.warning("DB retry %d: %s", attempt+1, e)
+                self._conn = None
+                time.sleep(1)
+
+    def known_paths(self) -> set:
+        """All file paths currently tracked in DB."""
+        rows = self.exec("SELECT path FROM files", fetch=True) or []
+        return {r[0] for r in rows}
+
+    def known_hashes(self) -> dict:
+        """hash -> path mapping from DB."""
+        rows = self.exec("SELECT hash, path FROM files", fetch=True) or []
+        return {h: Path(p) for h, p in rows}
+
+    def insert(self, hash_: str, path: Path, file_type: str, category: str = None):
+        try:
+            sz = path.stat().st_size
+        except Exception:
+            sz = 0
+        self.exec(
+            "INSERT INTO files (hash,path,name,category,file_type,size_bytes) "
+            "VALUES (%s,%s,%s,%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE path=%s, name=%s, category=COALESCE(%s,category), updated_at=NOW()",
+            (hash_, str(path), path.name, category, file_type, sz,
+             str(path), path.name, category)
+        )
+
+    def update_path(self, hash_: str, new_path: Path, category: str = None):
+        if category:
+            self.exec(
+                "UPDATE files SET path=%s, name=%s, category=%s, updated_at=NOW() WHERE hash=%s",
+                (str(new_path), new_path.name, category, hash_)
+            )
+        else:
+            self.exec(
+                "UPDATE files SET path=%s, name=%s, updated_at=NOW() WHERE hash=%s",
+                (str(new_path), new_path.name, hash_)
+            )
+
+    def delete(self, hash_: str):
+        self.exec("DELETE FROM files WHERE hash=%s", (hash_,))
+
+# ── Scan ───────────────────────────────────────────────────────────────────────
+def scan_all_input(watch_dir: Path) -> list[Path]:
+    """All media files in watch root + non-output subfolders."""
     result = []
     try:
         for e in os.scandir(watch_dir):
-            if e.is_file() and not skippable(e):
-                ext = Path(e.name).suffix.lower()
-                if ext in (IMAGE_EXTS | VIDEO_EXTS):
+            if skippable(e):
+                continue
+            if e.is_file():
+                if Path(e.name).suffix.lower() in (IMAGE_EXTS | VIDEO_EXTS):
                     result.append(Path(e.path))
-            elif e.is_dir() and e.name not in OUTPUT_DIRS and not e.name.startswith("."):
+            elif e.is_dir() and e.name not in OUTPUT_DIRS:
                 try:
                     for sub in os.scandir(e.path):
-                        if sub.is_file() and not skippable(sub):
-                            ext = Path(sub.name).suffix.lower()
-                            if ext in (IMAGE_EXTS | VIDEO_EXTS):
+                        if not skippable(sub) and sub.is_file():
+                            if Path(sub.name).suffix.lower() in (IMAGE_EXTS | VIDEO_EXTS):
                                 result.append(Path(sub.path))
                 except Exception:
                     pass
@@ -161,8 +223,8 @@ def scan_input_files(watch_dir: Path) -> list:
         pass
     return result
 
-def scan_images_root() -> list:
-    """Images sitting in Images/ root — staged but not classified yet."""
+def scan_images_root() -> list[Path]:
+    """Images staged in Images/ root (moved but not classified yet)."""
     try:
         return [
             Path(e.path) for e in os.scandir(IMAGES_DIR)
@@ -172,89 +234,11 @@ def scan_images_root() -> list:
     except Exception:
         return []
 
-def try_remove_empty(folder: Path):
-    if folder not in (WATCH_DIR, IMAGES_DIR, VIDEOS_DIR):
-        try:
-            if not any(True for _ in os.scandir(folder)):
-                folder.rmdir()
-        except Exception:
-            pass
-
-# ── Hash Store ────────────────────────────────────────────────────────────────
-class HashStore:
-    def __init__(self, log):
-        self._db: dict = {}
-        self.log = log
-
-    def build(self, root: Path) -> int:
-        files = all_files_recursive(root)
-        self.log.info("Dedup scan: hashing %d existing files...", len(files))
-        groups: dict = defaultdict(list)
-        for i, p in enumerate(files, 1):
-            h = sha256(p)
-            if h:
-                groups[h].append(p)
-            if i % 1000 == 0:
-                self.log.info("  Hashed %d / %d...", i, len(files))
-        deleted = 0
-        for h, paths in groups.items():
-            best = min(paths, key=lambda p: (copy_score(p), str(p)))
-            self._db[h] = best
-            for p in paths:
-                if p != best and p.exists():
-                    try:
-                        p.unlink()
-                        self.log.info("DEDUP-INIT  kept: %-40s  deleted: %s",
-                                      best.name, p.name)
-                        deleted += 1
-                    except Exception as exc:
-                        self.log.error("DEDUP-INIT  fail %s: %s", p, exc)
-        self.log.info("Dedup done — %d duplicates removed, %d unique files",
-                      deleted, len(self._db))
-        return deleted
-
-    def check(self, path: Path):
-        h = sha256(path)
-        if h is None:
-            return "no-hash"
-        if h in self._db:
-            existing = self._db[h]
-            if existing == path:
-                return h   # same file, already registered
-            if existing.exists():
-                keep_existing = copy_score(existing) <= copy_score(path)
-                if keep_existing:
-                    try:
-                        path.unlink()
-                        self.log.info("DEDUP  del copy: %-40s  kept: %s",
-                                      path.name, existing.name)
-                    except Exception as exc:
-                        self.log.error("DEDUP  fail %s: %s", path.name, exc)
-                    return None
-                else:
-                    try:
-                        existing.unlink()
-                        self.log.info("DEDUP  del old:  %-40s  kept: %s",
-                                      existing.name, path.name)
-                    except Exception as exc:
-                        self.log.error("DEDUP  fail %s: %s", existing.name, exc)
-                    self._db[h] = path
-                    return h
-            else:
-                self._db[h] = path
-                return h
-        self._db[h] = path
-        return h
-
-    def update(self, h, new_path: Path):
-        if h and h != "no-hash" and h in self._db:
-            self._db[h] = new_path
-
-# ── CLIP Classifier ───────────────────────────────────────────────────────────
+# ── CLIP ───────────────────────────────────────────────────────────────────────
 class Classifier:
     def __init__(self, log):
         self.log = log
-        self._ok = False
+        self.loaded = False
 
     def load(self):
         import torch
@@ -279,158 +263,211 @@ class Classifier:
                 vecs[cat] = avg / avg.norm()
         self.cats    = list(vecs.keys())
         self.cat_mat = torch.stack([vecs[c] for c in self.cats])
-        self._ok = True
-        self.log.info("CLIP ready — categories: %s", ", ".join(self.cats))
+        self.loaded  = True
+        self.log.info("CLIP ready — %s", " | ".join(self.cats))
 
-    def predict_batch(self, paths: list) -> list:
-        """Classify a batch of paths at once. Returns list of category strings."""
+    def classify(self, paths: list[Path]) -> list[str]:
         from PIL import Image
-        images, valid_idx = [], []
         results = ["Other"] * len(paths)
+        images, valid = [], []
         for i, p in enumerate(paths):
             try:
-                images.append(Image.open(p).convert("RGB"))
-                valid_idx.append(i)
+                signal.signal(signal.SIGALRM, _sigalrm)
+                signal.alarm(10)
+                img = Image.open(p).convert("RGB")
+                signal.alarm(0)
+                images.append(img)
+                valid.append(i)
             except Exception:
-                pass
+                signal.alarm(0)
+                self.log.warning("SKIP bad image: %s", p.name)
         if not images:
             return results
-        with self.torch.no_grad():
-            enc  = self.proc(images=images, return_tensors="pt", padding=True)
-            vis  = self.model.vision_model(pixel_values=enc["pixel_values"])
-            feat = self.model.visual_projection(vis.pooler_output)
-            feat = feat / feat.norm(dim=-1, keepdim=True)
+        try:
+            signal.signal(signal.SIGALRM, _sigalrm)
+            signal.alarm(120)
+            with self.torch.no_grad():
+                enc  = self.proc(images=images, return_tensors="pt", padding=True)
+                vis  = self.model.vision_model(pixel_values=enc["pixel_values"])
+                feat = self.model.visual_projection(vis.pooler_output)
+                feat = feat / feat.norm(dim=-1, keepdim=True)
+            signal.alarm(0)
+        except Exception as exc:
+            signal.alarm(0)
+            self.log.error("CLIP failed: %s", exc)
+            return results
         sims = feat @ self.cat_mat.T
         best = sims.argmax(dim=-1).tolist()
         if isinstance(best, int):
             best = [best]
-        for li, oi in enumerate(valid_idx):
+        for li, oi in enumerate(valid):
             results[oi] = self.cats[best[li]]
         return results
 
-# ── Core pipeline ─────────────────────────────────────────────────────────────
-def process_batch(paths: list, clf: Classifier, hs: HashStore, log,
-                  already_in_images=False):
+# ── Core processing batch ──────────────────────────────────────────────────────
+def process_files(files: list[Path], clf: Classifier, db: DB,
+                  known: dict, log) -> dict:
     """
-    Dedup + classify a batch of files.
-    already_in_images=True means files are already inside IMAGES_DIR root.
+    Process a batch of files through the full pipeline:
+      hash → dedup → stage → classify → move → DB
+    Returns updated known dict.
     """
-    # Stage all files into IMAGES_DIR root first (skip if already there)
-    staged = []
-    origins = {}   # staged path -> original path (for cleanup)
-    for src in paths:
+    to_classify: list[Path] = []
+    hashes: dict[Path, str] = {}
+
+    for src in files:
         if not src.exists():
             continue
         ext = src.suffix.lower()
-        if ext in VIDEO_EXTS:
-            # Videos: just dedup + move to Videos/
-            h = hs.check(src)
-            if h is not None:
-                dest = unique_dest(VIDEOS_DIR / src.name)
-                try:
-                    shutil.move(str(src), dest)
-                    hs.update(h, dest)
-                    log.info("VIDEO     %s", src.name)
-                    try_remove_empty(src.parent)
-                except Exception as exc:
-                    log.error("Video-move fail %s: %s", src.name, exc)
+
+        # ── Hash ──────────────────────────────────────────────────────────────
+        h = sha256(src)
+        if h is None:
+            log.warning("SKIP unhashable: %s", src.name)
             continue
+
+        # ── Dedup ─────────────────────────────────────────────────────────────
+        if h in known:
+            existing = known[h]
+            if existing == src:
+                # Same file, already registered — just make sure it's in DB
+                pass
+            elif existing.exists():
+                # Keep the better-named one
+                if copy_score(existing) <= copy_score(src):
+                    try:
+                        src.unlink()
+                        log.info("DEDUP  del copy: %-40s  kept: %s", src.name, existing.name)
+                    except Exception as exc:
+                        log.error("DEDUP fail %s: %s", src.name, exc)
+                    continue
+                else:
+                    try:
+                        existing.unlink()
+                        log.info("DEDUP  del old:  %-40s  kept: %s", existing.name, src.name)
+                    except Exception as exc:
+                        log.error("DEDUP fail %s: %s", existing.name, exc)
+                    known[h] = src
+                    db.update_path(h, src)
+            else:
+                # DB entry stale — update to current path
+                known[h] = src
+                db.update_path(h, src)
+
+        # ── Videos: stage directly to Videos/ ─────────────────────────────────
+        if ext in VIDEO_EXTS:
+            dest = unique_dest(VIDEOS_DIR / src.name)
+            try:
+                shutil.move(str(src), dest)
+                try_rmdir(src.parent)
+                known[h] = dest
+                db.insert(h, dest, "video")
+                log.info("VIDEO     %s", src.name)
+            except Exception as exc:
+                log.error("Video-move fail %s: %s", src.name, exc)
+            continue
+
         if ext not in IMAGE_EXTS:
             continue
-        if already_in_images:
-            staged.append(src)
+
+        # ── Images: stage to Images/ root, queue for CLIP ─────────────────────
+        if src.parent == IMAGES_DIR:
+            # Already staged, just queue for classification
+            to_classify.append(src)
+            hashes[src] = h
         else:
             dst = unique_dest(IMAGES_DIR / src.name)
             try:
                 shutil.move(str(src), dst)
-                try_remove_empty(src.parent)
-                staged.append(dst)
-                origins[dst] = src
+                try_rmdir(src.parent)
+                to_classify.append(dst)
+                hashes[dst] = h
+                known[h] = dst
             except Exception as exc:
                 log.error("Stage fail %s: %s", src.name, exc)
 
-    if not staged:
-        return
+    # ── CLIP classify + move to category subfolder ────────────────────────────
+    if to_classify:
+        categories = clf.classify(to_classify)
+        for p, cat in zip(to_classify, categories):
+            if not p.exists():
+                continue
+            h = hashes.get(p)
+            dest = unique_dest(IMAGES_DIR / cat / p.name)
+            try:
+                shutil.move(str(p), dest)
+                known[h] = dest
+                db.insert(h, dest, "image", category=cat)
+                log.info("CLASSIFY  [%-13s]  %s", cat, p.name)
+            except Exception as exc:
+                log.error("Classify-move fail %s: %s", p.name, exc)
 
-    # Dedup
-    to_classify = []
-    hashes = {}
-    for p in staged:
-        h = hs.check(p)
-        if h is not None:
-            to_classify.append(p)
-            hashes[p] = h
-        # if None, file was a duplicate and was deleted
+    return known
 
-    if not to_classify:
-        return
-
-    # Batch CLIP classify
-    categories = clf.predict_batch(to_classify)
-    for p, cat in zip(to_classify, categories):
-        dest = unique_dest(IMAGES_DIR / cat / p.name)
-        try:
-            shutil.move(str(p), dest)
-            hs.update(hashes[p], dest)
-            log.info("CLASSIFY  [%-13s]  %s", cat, p.name)
-        except Exception as exc:
-            log.error("Classify-move fail %s: %s", p.name, exc)
-
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ───────────────────────────────────────────────────────────────────────
 def main():
-    log = setup()
+    # Create output dirs
+    for d in [IMAGES_DIR, VIDEOS_DIR]:
+        d.mkdir(exist_ok=True)
+    for cat in CATEGORIES:
+        (IMAGES_DIR / cat).mkdir(exist_ok=True)
+
+    log  = setup_log()
+    db   = DB(log)
+    clf  = Classifier(log)
+
     log.info("=" * 66)
-    log.info("Photo Service  v3.0  starting")
-    log.info("  Watching : %s", WATCH_DIR)
-    log.info("  Pipeline : dedup (SHA256) -> stage -> CLIP classify")
-    log.info("  Batch    : %d images per CLIP call", BATCH_SIZE)
+    log.info("Photo Service  v5.0  — Continuous Pipeline")
+    log.info("  Watch  : %s", WATCH_DIR)
+    log.info("  DB     : photo_manager @ localhost")
+    log.info("  Batch  : %d images per CLIP call", BATCH_SIZE)
     log.info("=" * 66)
 
-    # Step 1 — dedup full tree
-    hs = HashStore(log)
-    hs.build(WATCH_DIR)
+    # ── Load existing hashes from DB (instant on restarts) ────────────────────
+    log.info("Loading known hashes from DB...")
+    known = db.known_hashes()
+    known_paths_in_db = {str(v) for v in known.values()}
+    log.info("DB: %d files already known — skipping those", len(known))
 
-    # Step 2 — load CLIP
-    clf = Classifier(log)
+    # ── Load CLIP ──────────────────────────────────────────────────────────────
     clf.load()
 
-    # Step 3 — process all existing files in WATCH root & input subfolders
-    pending_input = scan_input_files(WATCH_DIR)
-    if pending_input:
-        log.info("Startup: processing %d files from root/input folders...",
-                 len(pending_input))
-        for i in range(0, len(pending_input), BATCH_SIZE):
-            batch = pending_input[i : i + BATCH_SIZE]
-            process_batch(batch, clf, hs, log, already_in_images=False)
-            done = min(i + BATCH_SIZE, len(pending_input))
-            if done % 500 == 0 or done == len(pending_input):
-                log.info("  Progress: %d / %d", done, len(pending_input))
-        log.info("Startup input processing complete.")
+    # ── Find all pending files (not in DB) ────────────────────────────────────
+    def get_pending() -> list[Path]:
+        all_input = scan_all_input(WATCH_DIR)
+        staged    = scan_images_root()
+        all_files = list(dict.fromkeys(all_input + staged))  # deduplicate list
+        db_paths  = {str(v) for v in known.values()}
+        return [f for f in all_files if str(f) not in db_paths]
 
-    # Step 4 — classify anything sitting unclassified in Images/ root
-    pending_imgs = scan_images_root()
-    if pending_imgs:
-        log.info("Startup: classifying %d images already in Images/ root...",
-                 len(pending_imgs))
-        for i in range(0, len(pending_imgs), BATCH_SIZE):
-            batch = pending_imgs[i : i + BATCH_SIZE]
-            process_batch(batch, clf, hs, log, already_in_images=True)
-        log.info("Startup Images/ classify complete.")
+    # ── Process existing pending files ────────────────────────────────────────
+    pending = get_pending()
+    total   = len(pending)
+    if total:
+        log.info("Startup: %d files to process (not yet in DB)...", total)
+        done = 0
+        for i in range(0, total, BATCH_SIZE):
+            batch = pending[i:i + BATCH_SIZE]
+            known = process_files(batch, clf, db, known, log)
+            done += len(batch)
+            if done % 500 == 0 or done >= total:
+                log.info("  Progress: %d / %d processed", done, total)
+        log.info("Startup complete.")
+    else:
+        log.info("Startup: no pending files — all already in DB.")
 
-    log.info("Service fully active — watching %s every %ds", WATCH_DIR, POLL_SECS)
+    log.info("Service active — polling every %ds for new files", POLL_SECS)
 
-    # Polling loop — only truly NEW files
-    known = set(scan_input_files(WATCH_DIR))
-
+    # ── Continuous polling loop ────────────────────────────────────────────────
     try:
         while True:
             time.sleep(POLL_SECS)
-            current   = set(scan_input_files(WATCH_DIR))
-            new_files = current - known
-            if new_files:
-                batch = sorted(new_files)
-                process_batch(batch, clf, hs, log, already_in_images=False)
-            known = set(scan_input_files(WATCH_DIR))
+            pending = get_pending()
+            if pending:
+                log.info("New batch: %d files", len(pending))
+                for i in range(0, len(pending), BATCH_SIZE):
+                    batch = pending[i:i + BATCH_SIZE]
+                    known = process_files(batch, clf, db, known, log)
     except KeyboardInterrupt:
         log.info("Photo Service stopped.")
 
