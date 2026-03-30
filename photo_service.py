@@ -18,16 +18,18 @@ then new arrivals, forever. MySQL stores every file so restarts are instant.
 
 import os, sys, re, time, shutil, hashlib, logging, warnings, signal
 import mysql.connector
+from dotenv import load_dotenv
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["MPLBACKEND"] = "Agg"
 
+load_dotenv()
 from pathlib import Path
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-WATCH_DIR  = Path("/mnt/c/photo")
-IMAGES_DIR = WATCH_DIR / "Images"
-VIDEOS_DIR = WATCH_DIR / "Videos"
+WATCH_DIR  = Path(os.getenv("WATCH_DIR", "/mnt/c/photo"))
+IMAGES_DIR = Path(os.getenv("IMAGES_ROOT", str(WATCH_DIR / "Images")))
+VIDEOS_DIR = Path(os.getenv("VIDEOS_ROOT", str(WATCH_DIR / "Videos")))
 LOG_FILE   = WATCH_DIR / "photo_service.log"
 POLL_SECS  = 5
 BATCH_SIZE = 32   # CLIP batch size
@@ -43,9 +45,13 @@ SKIP_PFX  = ("dedup_report","photo_service","watcher","classification","content_
 OUTPUT_DIRS = {"Images","Videos"}
 
 DB_CONFIG = dict(
-    host="localhost", user="root", password="zerocall",
-    database="photo_manager", charset="utf8mb4",
-    connection_timeout=30, autocommit=True,
+    host=os.getenv("DB_HOST", "localhost"),
+    user=os.getenv("DB_USER", "root"),
+    password=os.getenv("DB_PASSWORD", ""),
+    database=os.getenv("DB_NAME", "photo_manager"),
+    charset="utf8mb4",
+    connection_timeout=30,
+    autocommit=True,
 )
 
 CATEGORIES = {
@@ -336,8 +342,14 @@ def process_files(files: list[Path], clf: Classifier, db: DB,
             log.warning("SKIP unhashable: %s", src.name)
             continue
 
-        # ── Duplicate: already processed — skip (user manages dedup via Gallery UI)
+        # ── Duplicate: hash already in DB — delete the physical duplicate
         if h in known:
+            try:
+                src.unlink()
+                try_rmdir(src.parent)
+                log.info("DEDUP     %s  (dup of %s)", src.name, known[h].name)
+            except Exception as exc:
+                log.error("Dedup delete fail %s: %s", src.name, exc)
             continue
 
         # ── Videos: stage directly to Videos/ ─────────────────────────────────
@@ -390,6 +402,49 @@ def process_files(files: list[Path], clf: Classifier, db: DB,
 
     return known
 
+# ── Reclassify NULL-category images already in DB ────────────────────────────
+def reclassify_nulls(clf: Classifier, db: DB, known: dict, log) -> int:
+    """Find all images in DB with NULL category, classify and move them."""
+    rows = db.exec(
+        "SELECT hash, path FROM files WHERE file_type='image' AND category IS NULL",
+        fetch=True
+    ) or []
+    candidates = [(h, Path(p)) for h, p in rows if Path(p).exists()]
+    if not candidates:
+        return 0
+    total = len(candidates)
+    log.info("Reclassifying %d images with NULL category...", total)
+    done = 0
+    for i in range(0, total, BATCH_SIZE):
+        batch = candidates[i:i + BATCH_SIZE]
+        paths = [p for _, p in batch]
+        categories = clf.classify(paths)
+        for (h, src), cat in zip(batch, categories):
+            if not src.exists():
+                continue
+            dest_dir = IMAGES_DIR / cat
+            dest_dir.mkdir(exist_ok=True)
+            if src.parent == dest_dir:
+                db.update_path(h, src, category=cat)
+                known[h] = src
+                log.info("RECLASSIFY [%-13s]  %s", cat, src.name)
+                continue
+            dest = unique_dest(dest_dir / src.name)
+            try:
+                shutil.move(str(src), dest)
+                try_rmdir(src.parent)
+                db.update_path(h, dest, category=cat)
+                known[h] = dest
+                log.info("RECLASSIFY [%-13s]  %s", cat, src.name)
+            except Exception as exc:
+                log.error("Reclassify-move fail %s: %s", src.name, exc)
+        done += len(batch)
+        if done % 500 == 0 or done >= total:
+            log.info("  Reclassify progress: %d / %d", done, total)
+    log.info("Reclassification complete: %d images processed.", total)
+    return total
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     # Create output dirs
@@ -419,6 +474,9 @@ def main():
     # ── Load CLIP ──────────────────────────────────────────────────────────────
     clf.load()
 
+    # ── Reclassify any images already in DB with NULL category ────────────────
+    reclassify_nulls(clf, db, known, log)
+
     # ── Find all pending files (not in DB) ────────────────────────────────────
     def get_pending() -> list[Path]:
         all_input = scan_all_input(WATCH_DIR)
@@ -446,6 +504,8 @@ def main():
     log.info("Service active — polling every %ds for new files", POLL_SECS)
 
     # ── Continuous polling loop ────────────────────────────────────────────────
+    RECLASSIFY_INTERVAL = 300  # re-check for NULL-category images every 5 min
+    last_reclassify = time.time()
     try:
         while True:
             time.sleep(POLL_SECS)
@@ -455,6 +515,9 @@ def main():
                 for i in range(0, len(pending), BATCH_SIZE):
                     batch = pending[i:i + BATCH_SIZE]
                     known = process_files(batch, clf, db, known, log)
+            if time.time() - last_reclassify >= RECLASSIFY_INTERVAL:
+                reclassify_nulls(clf, db, known, log)
+                last_reclassify = time.time()
     except KeyboardInterrupt:
         log.info("Photo Service stopped.")
 

@@ -14,12 +14,14 @@ Usage:
 
 import sys, os, time, shutil, logging, warnings
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
 
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # ── Config ────────────────────────────────────────────────────────────────────
-IMAGES_DIR = Path("/mnt/c/photo/Images")
+IMAGES_DIR = Path(os.getenv("IMAGES_ROOT", "/mnt/c/photo/Images"))
 LOG_FILE   = IMAGES_DIR / "content_watcher.log"
 POLL_SECS  = 5
 

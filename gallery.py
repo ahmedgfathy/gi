@@ -2,21 +2,30 @@
 from pathlib import Path
 import hashlib, os, threading, uuid, struct
 from functools import wraps
+from dotenv import load_dotenv
 from flask import (Flask, render_template, jsonify, request,
                    send_file, abort, session, redirect, url_for)
 
-IMAGES_ROOT       = Path("/mnt/c/photo/Images")
-ALLOWED_ROOT      = "/mnt/c/photo/"
-THUMB_DIR         = Path("/tmp/gi_thumbs")
+load_dotenv()
+
+IMAGES_ROOT       = Path(os.getenv("IMAGES_ROOT", "/mnt/c/photo/Images"))
+ALLOWED_ROOT      = os.getenv("WATCH_DIR", "/mnt/c/photo") + "/"
+THUMB_DIR         = Path(os.getenv("THUMB_DIR", "/tmp/gi_thumbs"))
 THUMB_SIZE        = (300, 300)
 PAGE_SIZE         = 60
 AUTOTAG_THRESHOLD = 0.72
 
-DB_CFG = dict(host="localhost", user="root", password="zerocall",
-              database="photo_manager", autocommit=False, connection_timeout=10)
+DB_CFG = dict(
+    host=os.getenv("DB_HOST", "localhost"),
+    user=os.getenv("DB_USER", "root"),
+    password=os.getenv("DB_PASSWORD", ""),
+    database=os.getenv("DB_NAME", "photo_manager"),
+    autocommit=False,
+    connection_timeout=10,
+)
 
 app = Flask(__name__)
-app.secret_key = os.urandom(32)
+app.secret_key = bytes.fromhex(os.getenv("FLASK_SECRET_KEY", os.urandom(32).hex()))
 
 # ── CLIP global (lazy-loaded) ─────────────────────────────────────────────────
 _clip      = {"model": None, "proc": None, "torch": None, "lock": threading.Lock()}
@@ -417,4 +426,4 @@ def delete_files():
 if __name__ == "__main__":
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     print("Gallery v3 running \u2192 http://localhost:5050")
-    app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("GALLERY_PORT", 5050)), debug=False, threaded=True)

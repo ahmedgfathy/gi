@@ -55,6 +55,7 @@ checkpoints/
 # Secrets / environment
 .env
 .env.*
+!.env.example
 *.secret
 
 # IDE

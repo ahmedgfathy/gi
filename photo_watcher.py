@@ -18,12 +18,15 @@ import sys
 import time
 import shutil
 import logging
+import os
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-WATCH_DIR  = Path("/mnt/c/photo")
-IMAGES_DIR = WATCH_DIR / "Images"
-VIDEOS_DIR = WATCH_DIR / "Videos"
+WATCH_DIR  = Path(os.getenv("WATCH_DIR", "/mnt/c/photo"))
+IMAGES_DIR = Path(os.getenv("IMAGES_ROOT", str(WATCH_DIR / "Images")))
+VIDEOS_DIR = Path(os.getenv("VIDEOS_ROOT", str(WATCH_DIR / "Videos")))
 LOG_FILE   = WATCH_DIR / "watcher.log"
 POLL_SECS  = 3          # how often to scan the watch directory
 
